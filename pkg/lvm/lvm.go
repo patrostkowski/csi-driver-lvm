@@ -19,6 +19,9 @@ const (
 
 	fsTypeXFS         = "xfs"
 	mountOptionNoUUID = "nouuid"
+
+	umountNotMountedMessage   = "not mounted"
+	umountNoMountPointMessage = "no mount point specified"
 )
 
 type vgReport struct {
@@ -152,10 +155,20 @@ func BindMountLV(log *slog.Logger, lvname, mountPath string, devicePath string) 
 func UmountLV(log *slog.Logger, targetPath string) {
 	cmd := exec.Command("umount", "--lazy", "--force", targetPath)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		//RETURN err ?
-		log.Error("unable to umount", "targetPath", targetPath, "output", string(out), "error", err)
+	if err == nil {
+		return
 	}
+	// Unpublish is idempotent, so a target that is no longer mounted is not an error.
+	if isNotMounted(string(out)) {
+		log.Debug("target already unmounted", "targetPath", targetPath)
+		return
+	}
+	//RETURN err ?
+	log.Error("unable to umount", "targetPath", targetPath, "output", string(out), "error", err)
+}
+
+func isNotMounted(umountOutput string) bool {
+	return strings.Contains(umountOutput, umountNotMountedMessage) || strings.Contains(umountOutput, umountNoMountPointMessage)
 }
 
 // VgExists checks if the given volume group exists
@@ -330,7 +343,7 @@ func CreateLV(log *slog.Logger, params CreateLVParams) (string, error) {
 
 	tags := append([]string{VolumeDriverTag}, params.Tags...)
 	for _, tag := range tags {
-		args = append(args, "--addtag", tag)
+		args = append(args, flagAddTag, tag)
 	}
 	args = append(args, vg)
 	log.Debug("lvcreate", "args", args)
@@ -339,19 +352,14 @@ func CreateLV(log *slog.Logger, params CreateLVParams) (string, error) {
 	return string(out), err
 }
 
+// LvExists reports whether the LV exists, logging only real lvs failures and not a missing LV.
 func LvExists(log *slog.Logger, vg string, name string) bool {
-	var (
-		vgname = vg + "/" + name
-		cmd    = exec.Command("lvs", vgname, "--noheadings", "-o", "lv_name")
-	)
-
-	out, err := cmd.CombinedOutput()
+	lv, err := GetLV(log, vg, name)
 	if err != nil {
-		log.Error("unable to list existing volumes", "error", err, "output", string(out))
+		log.Error("unable to list existing volumes", "error", err)
 		return false
 	}
-
-	return name == strings.TrimSpace(string(out))
+	return lv != nil
 }
 
 func ExtendLVS(log *slog.Logger, vg string, name string, size uint64, isBlock bool) (string, error) {

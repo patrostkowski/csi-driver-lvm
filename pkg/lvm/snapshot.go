@@ -47,13 +47,13 @@ func CreateSnapshot(log *slog.Logger, params CreateSnapshotParams) (string, erro
 	args := []string{"-v", "--yes", "--snapshot", "-n", params.Name}
 	args = append(args, params.Size.lvcreateArgs()...)
 	for _, tag := range params.Tags {
-		args = append(args, "--addtag", tag)
+		args = append(args, flagAddTag, tag)
 	}
-	args = append(args, params.VG+"/"+params.Origin)
+	args = append(args, qualifiedName(params.VG, params.Origin))
 
 	log.Debug("lvcreate snapshot", "args", args)
 
-	out, err := exec.Command("lvcreate", args...).CombinedOutput()
+	out, err := exec.Command(lvcreateCmd, args...).CombinedOutput()
 	return string(out), err
 }
 
@@ -72,15 +72,15 @@ type ReplaceTagParams struct {
 
 // ReplaceTag swaps one tag of an LV for another in a single lvchange call.
 func ReplaceTag(log *slog.Logger, params ReplaceTagParams) (string, error) {
-	args := []string{"--deltag", params.OldTag, "--addtag", params.NewTag, params.VG + "/" + params.Name}
+	args := []string{flagDelTag, params.OldTag, flagAddTag, params.NewTag, qualifiedName(params.VG, params.Name)}
 
-	log.Debug("lvchange", "args", args)
+	log.Debug(lvchangeCmd, "args", args)
 
-	out, err := exec.Command("lvchange", args...).CombinedOutput()
+	out, err := exec.Command(lvchangeCmd, args...).CombinedOutput()
 	return string(out), err
 }
 
 // SnapshotsOf returns the snapshots of the given origin LV.
 func SnapshotsOf(log *slog.Logger, vg, origin string) ([]LogicalVolume, error) {
-	return listLVs(log, vg, fmt.Sprintf("origin=%q", origin))
+	return listLVs(log, vg, selectEquals(lvsSelectOrigin, origin))
 }

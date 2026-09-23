@@ -32,6 +32,21 @@ const (
 
 	tagKeyValueSeparator = "="
 	tagListSeparator     = ","
+	// tagSpecialChars are the non-alphanumeric characters LVM allows in tags.
+	tagSpecialChars       = "_+.-/=!:&#"
+	tagInvalidReplacement = '_'
+
+	lvsCmd      = "lvs"
+	lvcreateCmd = "lvcreate"
+	lvchangeCmd = "lvchange"
+
+	flagAddTag = "--addtag"
+	flagDelTag = "--deltag"
+
+	lvPathSeparator = "/"
+
+	lvsSelectName   = "lv_name"
+	lvsSelectOrigin = "origin"
 
 	lvsReportTimeFormat = `report{time_format="%s"}`
 	lvsReportFields     = "lv_name,vg_name,origin,origin_size,lv_size,lv_time,lv_tags,lv_snapshot_invalid,lv_attr"

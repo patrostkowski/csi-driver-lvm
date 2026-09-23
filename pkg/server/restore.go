@@ -19,11 +19,16 @@ type restoreParams struct {
 	VolumeMode    string
 }
 
+// SnapshotID returns the ID of the snapshot the volume is restored from.
+func (p restoreParams) SnapshotID() string {
+	return p.Req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
+}
+
 // restoreVolume creates a new volume and block-copies the snapshot into it, leaving the snapshot untouched.
 func (d *Driver) restoreVolume(ctx context.Context, params restoreParams) (*csi.CreateVolumeResponse, error) {
 	var (
 		name  = params.Req.GetName()
-		rawID = params.Req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
+		rawID = params.SnapshotID()
 	)
 
 	id, err := parseSnapshotID(rawID)
@@ -140,14 +145,19 @@ func (d *Driver) ensureRestoreTarget(params ensureRestoreTargetParams) (bool, er
 		return false, status.Errorf(codes.Internal, "unable to look up volume %s: %v", params.Name, err)
 	}
 
-	if target != nil {
-		if target.Tags[lvm.TagRestoredFrom] != lvm.SanitizeTagValue(params.SnapshotID) {
-			return false, status.Errorf(codes.AlreadyExists, "volume %s already exists with a different content source", params.Name)
-		}
-		// A missing job with an in-progress tag means the driver restarted mid-copy, so the copy starts over.
-		return target.Tags[lvm.TagRestoreState] == lvm.RestoreStateDone, nil
+	if target == nil {
+		return false, d.createRestoreTarget(params)
+	}
+	if target.Tags[lvm.TagRestoredFrom] != lvm.SanitizeTagValue(params.SnapshotID) {
+		return false, status.Errorf(codes.AlreadyExists, "volume %s already exists with a different content source", params.Name)
 	}
 
+	// A missing job with an in-progress tag means the driver restarted mid-copy, so the copy starts over.
+	return target.Tags[lvm.TagRestoreState] == lvm.RestoreStateDone, nil
+}
+
+// createRestoreTarget creates the LV a snapshot is copied into, tagged as an unfinished restore.
+func (d *Driver) createRestoreTarget(params ensureRestoreTargetParams) error {
 	d.log.Info("creating volume from snapshot", "name", params.Name, "snapshot-id", params.SnapshotID)
 
 	output, err := lvm.CreateLV(d.log, lvm.CreateLVParams{
@@ -163,13 +173,13 @@ func (d *Driver) ensureRestoreTarget(params ensureRestoreTargetParams) (bool, er
 		},
 	})
 	if err != nil && lvm.IsInsufficientSpace(output) {
-		return false, status.Errorf(codes.ResourceExhausted, "not enough space in vg %s for volume %s: %s", d.vgName, params.Name, output)
+		return status.Errorf(codes.ResourceExhausted, "not enough space in vg %s for volume %s: %s", d.vgName, params.Name, output)
 	}
 	if err != nil {
-		return false, status.Errorf(codes.Internal, "unable to create lv %s: %v (%s)", params.Name, err, output)
+		return status.Errorf(codes.Internal, "unable to create lv %s: %v (%s)", params.Name, err, output)
 	}
 
-	return false, nil
+	return nil
 }
 
 // copySnapshotParams describes a block copy from a snapshot LV into a restore target LV.

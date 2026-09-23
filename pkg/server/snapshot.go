@@ -212,13 +212,9 @@ func matchesSnapshotFilter(snapshot *csi.Snapshot, req *csi.ListSnapshotsRequest
 
 // paginate returns the page starting at the index encoded in token and the token of the next page.
 func paginate[T any](items []T, token string, maxEntries int32) ([]T, string, error) {
-	start := 0
-	if token != "" {
-		parsed, err := strconv.Atoi(token)
-		if err != nil || parsed < 0 || parsed > len(items) {
-			return nil, "", fmt.Errorf("invalid starting token %q", token)
-		}
-		start = parsed
+	start, err := parseStartingToken(token, len(items))
+	if err != nil {
+		return nil, "", err
 	}
 	if maxEntries < 0 {
 		return nil, "", fmt.Errorf("max entries must not be negative")
@@ -237,34 +233,45 @@ func paginate[T any](items []T, token string, maxEntries int32) ([]T, string, er
 	return items[start:end], nextToken, nil
 }
 
-func (d *Driver) toCSISnapshot(lv lvm.LogicalVolume) *csi.Snapshot {
-	sizeBytes := lv.OriginSize
-	if raw, ok := lv.Tags[lvm.TagSourceSize]; ok {
-		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			sizeBytes = parsed
-		}
+// parseStartingToken returns the list index encoded in token, which is 0 for an empty token.
+func parseStartingToken(token string, total int) (int, error) {
+	if token == "" {
+		return 0, nil
 	}
+	start, err := strconv.Atoi(token)
+	if err != nil || start < 0 || start > total {
+		return 0, fmt.Errorf("invalid starting token %q", token)
+	}
+	return start, nil
+}
 
+func (d *Driver) toCSISnapshot(lv lvm.LogicalVolume) *csi.Snapshot {
 	return &csi.Snapshot{
 		SnapshotId:     snapshotID{Node: d.nodeId, VG: lv.VG, LV: lv.Name}.String(),
 		SourceVolumeId: lv.Tags[lvm.TagSourceVolume],
-		SizeBytes:      sizeBytes,
+		SizeBytes:      snapshotSourceSize(lv),
 		CreationTime:   timestamppb.New(lv.CreationTime),
 		ReadyToUse:     !lv.SnapshotInvalid,
 	}
 }
 
+// snapshotSourceSize returns the origin size at snapshot time, falling back to the current origin size.
+func snapshotSourceSize(lv lvm.LogicalVolume) int64 {
+	raw, ok := lv.Tags[lvm.TagSourceSize]
+	if !ok {
+		return lv.OriginSize
+	}
+	size, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return lv.OriginSize
+	}
+	return size
+}
+
 // snapshotCOWSize returns the copy-on-write size for a thick snapshot from the snapshot class parameters.
 func snapshotCOWSize(params map[string]string) (lvm.SnapshotSize, error) {
 	if raw, ok := params[paramSnapshotSize]; ok {
-		quantity, err := resource.ParseQuantity(raw)
-		if err != nil {
-			return lvm.SnapshotSize{}, fmt.Errorf("invalid %s %q: %w", paramSnapshotSize, raw, err)
-		}
-		if quantity.Value() <= 0 {
-			return lvm.SnapshotSize{}, fmt.Errorf("%s must be greater than 0", paramSnapshotSize)
-		}
-		return lvm.SnapshotSize{Bytes: quantity.Value()}, nil
+		return parseAbsoluteSnapshotSize(raw)
 	}
 
 	raw, ok := params[paramSnapshotSizePercent]
@@ -276,4 +283,15 @@ func snapshotCOWSize(params map[string]string) (lvm.SnapshotSize, error) {
 		return lvm.SnapshotSize{}, fmt.Errorf("%s must be an integer between 1 and %d, got %q", paramSnapshotSizePercent, maxSnapshotSizePercent, raw)
 	}
 	return lvm.SnapshotSize{PercentOfOrigin: percent}, nil
+}
+
+func parseAbsoluteSnapshotSize(raw string) (lvm.SnapshotSize, error) {
+	quantity, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return lvm.SnapshotSize{}, fmt.Errorf("invalid %s %q: %w", paramSnapshotSize, raw, err)
+	}
+	if quantity.Value() <= 0 {
+		return lvm.SnapshotSize{}, fmt.Errorf("%s must be greater than 0", paramSnapshotSize)
+	}
+	return lvm.SnapshotSize{Bytes: quantity.Value()}, nil
 }

@@ -64,7 +64,7 @@ func SanitizeTagValue(value string) string {
 		if isTagRune(r) {
 			return r
 		}
-		return '_'
+		return tagInvalidReplacement
 	}, value)
 }
 
@@ -72,7 +72,7 @@ func isTagRune(r rune) bool {
 	switch {
 	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 		return true
-	case strings.ContainsRune("_+.-/=!:&#", r):
+	case strings.ContainsRune(tagSpecialChars, r):
 		return true
 	default:
 		return false
@@ -81,7 +81,7 @@ func isTagRune(r rune) bool {
 
 // GetLV returns the named logical volume, or nil if it does not exist.
 func GetLV(log *slog.Logger, vg, name string) (*LogicalVolume, error) {
-	lvs, err := listLVs(log, vg, fmt.Sprintf("lv_name=%q", name))
+	lvs, err := listLVs(log, vg, selectEquals(lvsSelectName, name))
 	if err != nil {
 		return nil, err
 	}
@@ -110,10 +110,10 @@ func listLVs(log *slog.Logger, vg, selection string) ([]LogicalVolume, error) {
 		args = append(args, "-S", selection)
 	}
 
-	log.Debug("lvs", "args", args)
+	log.Debug(lvsCmd, "args", args)
 
 	// stdout only, since lvs prints warnings to stderr that would break the JSON.
-	out, err := exec.Command("lvs", args...).Output()
+	out, err := exec.Command(lvsCmd, args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("unable to list logical volumes of vg %q: %w (%s)", vg, err, stderrOf(err))
 	}
@@ -127,18 +127,31 @@ func parseLVReport(out []byte) ([]LogicalVolume, error) {
 		return nil, fmt.Errorf("failed to parse lvs output: %w", err)
 	}
 
-	var lvs []LogicalVolume
+	var rows []lvReportRow
 	for _, r := range report.Report {
-		for _, row := range r.LV {
-			lv, err := row.toLogicalVolume()
-			if err != nil {
-				return nil, err
-			}
-			lvs = append(lvs, lv)
+		rows = append(rows, r.LV...)
+	}
+
+	lvs := make([]LogicalVolume, 0, len(rows))
+	for _, row := range rows {
+		lv, err := row.toLogicalVolume()
+		if err != nil {
+			return nil, err
 		}
+		lvs = append(lvs, lv)
 	}
 
 	return lvs, nil
+}
+
+// selectEquals builds an lvs selection that matches a field against a quoted value.
+func selectEquals(field, value string) string {
+	return fmt.Sprintf("%s=%q", field, value)
+}
+
+// qualifiedName returns the vg/lv name LVM commands expect.
+func qualifiedName(vg, name string) string {
+	return vg + lvPathSeparator + name
 }
 
 func (row lvReportRow) toLogicalVolume() (LogicalVolume, error) {

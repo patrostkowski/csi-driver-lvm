@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -36,10 +37,8 @@ func parseSnapshotID(raw string) (snapshotID, error) {
 	if len(parts) != snapshotIDParts {
 		return snapshotID{}, fmt.Errorf("snapshot id %q must have the form <node>%s<vg>%s<lv>", raw, snapshotIDSeparator, snapshotIDSeparator)
 	}
-	for _, part := range parts {
-		if part == "" {
-			return snapshotID{}, fmt.Errorf("snapshot id %q contains an empty part", raw)
-		}
+	if slices.Contains(parts, "") {
+		return snapshotID{}, fmt.Errorf("snapshot id %q contains an empty part", raw)
 	}
 
 	return snapshotID{Node: parts[0], VG: parts[1], LV: parts[2]}, nil

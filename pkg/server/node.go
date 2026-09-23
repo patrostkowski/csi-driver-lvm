@@ -369,11 +369,8 @@ func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolume
 	defer release()
 
 	// LVM cannot resize a snapshot origin, and Aborted keeps kubelet retrying where FailedPrecondition would not.
-	if err := d.ensureNoSnapshots(volID); err != nil {
-		if status.Code(err) != codes.FailedPrecondition {
-			return nil, err
-		}
-		return nil, status.Error(codes.Aborted, status.Convert(err).Message())
+	if err := d.ensureNoSnapshots(volID, codes.Aborted); err != nil {
+		return nil, err
 	}
 
 	info, err := os.Stat(volPath)

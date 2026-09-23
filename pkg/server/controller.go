@@ -144,7 +144,7 @@ func (d *Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest)
 	}
 
 	// Removing a thick origin also removes its snapshots, which would silently break VolumeSnapshots.
-	if err := d.ensureNoSnapshots(req.GetVolumeId()); err != nil {
+	if err := d.ensureNoSnapshots(req.GetVolumeId(), codes.FailedPrecondition); err != nil {
 		return nil, err
 	}
 
@@ -160,8 +160,8 @@ func (d *Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest)
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
-// ensureNoSnapshots fails with FailedPrecondition if the volume is the origin of any snapshot.
-func (d *Driver) ensureNoSnapshots(volumeID string) error {
+// ensureNoSnapshots fails with the given code if the volume is the origin of any snapshot.
+func (d *Driver) ensureNoSnapshots(volumeID string, code codes.Code) error {
 	snapshots, err := lvm.SnapshotsOf(d.log, d.vgName, volumeID)
 	if err != nil {
 		return status.Errorf(codes.Internal, "unable to list snapshots of volume %s: %v", volumeID, err)
@@ -174,7 +174,7 @@ func (d *Driver) ensureNoSnapshots(volumeID string) error {
 	for _, snapshot := range snapshots {
 		ids = append(ids, snapshotID{Node: d.nodeId, VG: d.vgName, LV: snapshot.Name}.String())
 	}
-	return status.Errorf(codes.FailedPrecondition, "volume %s still has snapshots: %s", volumeID, strings.Join(ids, ", "))
+	return status.Errorf(code, "volume %s still has snapshots: %s", volumeID, strings.Join(ids, ", "))
 }
 
 func (d *Driver) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
