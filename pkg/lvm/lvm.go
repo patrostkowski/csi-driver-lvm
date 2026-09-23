@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,9 @@ const (
 	linearType  = "linear"
 	stripedType = "striped"
 	mirrorType  = "mirror"
+
+	fsTypeXFS         = "xfs"
+	mountOptionNoUUID = "nouuid"
 )
 
 type vgReport struct {
@@ -88,6 +92,11 @@ func MountLV(log *slog.Logger, lvname, mountPath, fsType, devicePath string, mou
 	err = os.MkdirAll(mountPath, 0777|os.ModeSetgid)
 	if err != nil {
 		return string(out), fmt.Errorf("unable to create mount directory for lv:%s err:%w", lvname, err)
+	}
+
+	// Restored volumes share the source's filesystem UUID, which xfs refuses to mount twice.
+	if fsType == fsTypeXFS && !slices.Contains(mountOptions, mountOptionNoUUID) {
+		mountOptions = append(slices.Clone(mountOptions), mountOptionNoUUID)
 	}
 
 	// --make-shared is required that this mount is visible outside this container.
@@ -250,9 +259,28 @@ func CreateVG(log *slog.Logger, name string, devicesPattern string) (string, err
 	return string(out), err
 }
 
+// CreateLVParams describes a logical volume to create.
+type CreateLVParams struct {
+	VG        string
+	Name      string
+	Size      uint64
+	Type      string
+	Integrity bool
+	// Tags are added in addition to VolumeDriverTag.
+	Tags []string
+}
+
 // CreateLV creates the new volume
 // used by lvcreate provisioner pod and by nodeserver for ephemeral volumes
-func CreateLV(log *slog.Logger, vg string, name string, size uint64, lvmType string, integrity bool) (string, error) {
+func CreateLV(log *slog.Logger, params CreateLVParams) (string, error) {
+	var (
+		vg        = params.VG
+		name      = params.Name
+		size      = params.Size
+		lvmType   = params.Type
+		integrity = params.Integrity
+	)
+
 	if LvExists(log, vg, name) {
 		log.Debug("logicalvolume already exists", "name", name)
 		return name, nil
@@ -300,7 +328,7 @@ func CreateLV(log *slog.Logger, vg string, name string, size uint64, lvmType str
 		}
 	}
 
-	tags := []string{"lv.metal-stack.io/csi-lvm-driver"}
+	tags := append([]string{VolumeDriverTag}, params.Tags...)
 	for _, tag := range tags {
 		args = append(args, "--addtag", tag)
 	}
